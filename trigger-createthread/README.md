@@ -2,6 +2,7 @@
 
 * GPT 5.5 high
 * ~40$
+* https://winbindex.m417z.com/?file=mpengine.dll
 
 
 ## A Trigger Callstack
@@ -32,7 +33,7 @@ open the target process with READ_VM rights, as identified by the ETW event
 `PspLogAUditOpenProcessEvent` this callstack is based on. 
 
 Analysis topic: 
-* Queue -> Process Scan -> **Find unbacked memory images** -> OpenProcess()
+* Queue -> **Process Scan -> Find unbacked memory images** -> OpenProcess()
 
 
 ## C Other Checks

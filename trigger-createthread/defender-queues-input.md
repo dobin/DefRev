@@ -79,3 +79,195 @@ If the goal is to find where external events become Defender events, focus on th
 5. Final enqueue: `ProcessContextPushNotification`.
 
 `ProcessContextPushNotification` is the important enqueue point, but not the external event source. The external event source is the RSIG/RTP or extended RTP callback path, and the factory is where raw telemetry is materialized into Defender's internal notification objects.
+
+
+## Domains
+
+**Domains**
+The `1`, `2`, `8`, `9` values are raw RTP/BM input domains, not BM event types.
+
+- Normal `QueueRtpNotification` layout: domain at `event+0x8`, event/type-ish field logged from `event+0x18`.
+- Extended layout: domain at `event+0x10`, corresponding type field logged from `event+0x20`.
+- The domain selects a factory/callback lane. The resulting internal `INotification` has its own notification type returned by the vtable.
+
+What I found:
+
+| Domain | Adapter | Meaning from code |
+|---:|---|---|
+| `1` | `FUN_180122690` | Basic RTP notification lane. Validates domain and forwards directly to the registered queue callback. |
+| `2` | `FUN_180123120` | Process-context/lifecycle-heavy lane. Requires extra payload pointer, runs side callbacks at controller offsets `+0x20`, `+0x30`, `+0x28`, then forwards to the main queue callback. |
+| `8` | `FUN_1806163d0` | Secondary RTP/BM lane. Thin validator/forwarder; semantics are determined later by the factory-created notification object. |
+| `9` | `FUN_1805eeab0` | Another secondary RTP/BM lane. Also thin validator/forwarder. I do not see evidence that this is related to the global threadpool’s bucket `9`; same number, different layer. |
+
+The common path is:
+
+```text
+domain adapter
+  -> FUN_180123a0c
+  -> QueueRtpNotification
+  -> notification factory
+  -> QueueBmNotification
+  -> SubmitNotificationToProcessContext
+  -> ProcessContextPushNotification
+```
+
+## Remote Thread Creation
+
+The notification you’re asking about maps to `RemoteThreadCreate`.
+
+Two relevant IDs exist:
+
+| Layer | Type |
+|---|---|
+| Internal notification/report type | `0x21` |
+| BM behavior event code | `0x400e` / `BM_RemoteThreadCreate` |
+
+The clearest formatter/consumer is:
+
+```text
+FUN_180455d20
+```
+
+It checks:
+
+```c
+notification_type == 0x21
+```
+
+`FUN_1804525c8(0x21)` maps it to domain string:
+
+```text
+System
+```
+
+`FUN_180452370(0x21)` maps it to type string:
+
+```text
+RemoteThreadCreate
+```
+
+Data fields used by `FUN_180455d20`:
+
+| Field | Offset / source |
+|---|---|
+| Source process id | notification header `piVar5[3]` |
+| Source process creation time | notification header qword at `piVar5+1` |
+| Sequence id | notification header qword at `piVar5+6` |
+| Target process id | notification object `+0xd0` |
+| Target process creation time | notification object `+0xc8` |
+| Target thread id | notification object `+0xdc` |
+| Target thread creation time | notification object `+0xd4` |
+| Target image name | notification object `+0xe0` |
+| Optional short target image name | resolved from target image path |
+
+It emits/report-formats this XML-style payload:
+
+```text
+<RemoteThreadCreate
+  TargetProcessId="%u"
+  TargetProcessCreationTime="%llu"
+  TargetThreadId="%u"
+  TargetThreadCreationTime="%llu"
+  TargetImageName="%s">
+```
+
+There is also a later behavior-module emission site:
+
+```text
+FUN_180561790
+```
+
+That function issues:
+
+- `0x400e` = `BM_RemoteThreadCreate`
+- `0x402e` = `BM_Etw_CodeInjection`, tagged with `"remotethread"`
+- `0x408a` = `BM_Etw_V2CodeInjection`, with data like `imagename:%ls;targetprocessppid:%lu:%llu` and tag `injectiontype:remotethread;`
+
+So: queue-side internal notification type is `0x21` (`System/RemoteThreadCreate`), while the BM behavior event name table calls the same activity `0x400e BM_RemoteThreadCreate`.
+
+
+# Thread Creation Notification 
+
+`FUN_180561790` is the remote-thread-create handling path that turns a queued notification into BM behavior-module events and taints/reinspects the target process.
+
+**High-Level Flow**
+1. Gets the BM metastore with `Bm_GetMetaStore`.
+2. Extracts/resolves the target image path from the notification via `FUN_180561d00`.
+3. Checks whether this is actually cross-process:
+   - It compares notification target process identity at `param_3+0xc8/+0xd0` with the source notification process identity returned by the notification vtable.
+   - If source and target are same process, it skips the remote-thread behavior emission.
+4. Looks up a prior verdict/cache entry for the target process with `Bm_MetaStoreLookupVerdict(..., cacheMode=2)`.
+5. If verdict bit `2` is set, it skips emission.
+6. Gets the current process-context image path and calls `FUN_1801da920`, which appears to mark/taint/reinspect the target process for injection context.
+7. Extracts the filename component from the target image path with `FindLastWideChar(..., '\\') + 2`.
+8. Emits three behavior-module events.
+
+**The Three Emissions**
+The actual behavior-module emission calls are all `EmitBehaviorModuleEvent(...)`.
+
+1. `BM_RemoteThreadCreate`
+
+```c
+event.code = 0x400e; // BM_RemoteThreadCreate
+event.flags = 0x400000;
+event.image_name = basename(target_image_path);
+EmitBehaviorModuleEvent(..., &event);
+```
+
+This is the direct behavior event: remote thread creation into the target image.
+
+2. `BM_Etw_CodeInjection`
+
+```c
+event.code = 0x402e; // BM_Etw_CodeInjection
+event.flags1 = 0x400000;
+event.flags2 = 0x400000;
+event.tag = L"remotethread";
+event.image_name = basename(target_image_path);
+EmitBehaviorModuleEvent(..., &event);
+```
+
+This reclassifies the same activity as generic code injection with the injection subtype `remotethread`.
+
+3. `BM_Etw_V2CodeInjection`
+
+It first builds a detail string:
+
+```text
+imagename:%ls;targetprocessppid:%lu:%llu
+```
+
+Using:
+- `%ls` = basename target image
+- `%lu` = target process id from `param_3+0xd0`
+- `%llu` = target process creation time from `param_3+0xc8`
+
+Then emits:
+
+```c
+event.code = 0x408a; // BM_Etw_V2CodeInjection
+event.data = L"imagename:...;targetprocessppid:pid:ctime";
+event.flags1 = 0x400000;
+event.flags2 = 0x400000;
+event.tag = L"injectiontype:remotethread;";
+EmitBehaviorModuleEvent(..., &event);
+```
+
+**Important Offsets**
+For the remote-thread notification object (`param_3`):
+
+| Offset | Meaning |
+|---:|---|
+| `+0xc8` | target process creation time |
+| `+0xd0` | target process id |
+| `+0xe0` | target image path string |
+
+The source process identity comes from the notification header returned by the vtable call:
+
+| Header field | Meaning |
+|---|---|
+| `header+0x04` / `header+0x08` style tuple | source process creation time |
+| `header+0x0c` | source process id |
+
+**Net Effect**
+`FUN_180561790` says: if a process creates a thread in another tracked process, and the target is not already verdict-suppressed, emit behavior evidence for remote-thread injection under three names: direct `BM_RemoteThreadCreate`, generic `BM_Etw_CodeInjection`, and richer `BM_Etw_V2CodeInjection`. It also marks/reinspects the target process so later BM logic treats it as tainted/injection-related.

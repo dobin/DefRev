@@ -198,6 +198,14 @@ drwxr-xr-x 7 root root     4096 Jul  6 16:12 History
 drwxr-xr-x 3 root root     4096 Jul  6 16:12 RtSigs
 ```
 
+
+```
+MsMpEngCP.exe (The Content Process)The main Windows Defender background process you usually see in Task Manager is MsMpEng.exe. The "CP" in this version stands for Content Process.  What it does: This executable is a stripped-down, highly restricted version of the Defender engine. It is spun up in a low-privilege environment (an AppContainer) specifically to handle the most dangerous job an antivirus has: opening, unpacking, and scanning untrusted or potentially malicious files.  
+
+MsMpEngSvc.dll (The Service Library)DLLs (Dynamic Link Libraries) contain code and data that multiple programs can use at the same time.What it does: This is the supporting file that provides the necessary service functions, rules, and logic that MsMpEngCP.exe needs to run and communicate safely with the main Windows Defender application.
+```
+
+
 ```
 ./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.87
 ./History

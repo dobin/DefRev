@@ -151,7 +151,7 @@ The DB path is constructed as:
 <Defender engine/base directory>\mpenginedb.db
 ```
 
-(`C:\ProgramData\Microsoft\Windows Defender\Scans\`)
+
 
 The base directory comes from Defender global config at `DAT_1810c5310 + 0x6a8`. The same base is used for engine/sandbox files like `MsMpEngCP.exe` / `MsMpEngSvc.dll`, so on a live Windows system it is likely under Defender’s protected engine/platform data area.
 
@@ -165,6 +165,111 @@ The base directory comes from Defender global config at `DAT_1810c5310 + 0x6a8`.
 - It may be ACL-protected and locked by Defender.
 - There is a setting `MpSqliteCodecDisable`, suggesting encryption/codec support may exist. If codec is enabled, a raw copy may not open cleanly with stock `sqlite3`.
 - Some state is only in live in-memory caches/process contexts, so the DB is not a complete dump of all BM state.
+
+
+## Directory
+
+`C:\ProgramData\Microsoft\Windows Defender\Scans\`:
+```
+drwxr-xr-x 2 root root     4096 Jul  6 16:12 BackupStore
+drwxr-xr-x 2 root root     4096 Jul  6 16:12 CleanFileTelemetry
+-rwxr-xr-x 1 root root  2117664 Jul  6 16:12 DefenderEcsCache.bin64
+drwxr-xr-x 2 root root     4096 Jul  6 16:12 FilesStash
+drwxr-xr-x 7 root root     4096 Jul  6 16:12 History
+-rwxr-xr-x 1 root root 35767028 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin
+-rwxr-xr-x 1 root root  1449336 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.01
+-rwxr-xr-x 1 root root 52479192 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.67
+-rwxr-xr-x 1 root root  3500608 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.6C
+-rwxr-xr-x 1 root root 63451136 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.79
+-rwxr-xr-x 1 root root  8474624 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.7C
+-rwxr-xr-x 1 root root 59900192 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.7E
+-rwxr-xr-x 1 root root 26210612 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.80
+-rwxr-xr-x 1 root root  2028520 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.83
+-rwxr-xr-x 1 root root 12489284 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.87
+-rwxr-xr-x 1 root root   438272 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.91
+-rwxr-xr-x 1 root root   438272 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.9C
+-rwxr-xr-x 1 root root 44237984 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.A0
+-rwxr-xr-x 1 root root  1127696 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.DB
+-rwxr-xr-x 1 root root    69336 Jul  6 16:12 mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.E6
+-rwxr-xr-x 1 root root      120 Jul  6 16:12 MpDiag.bin
+-rwxr-xr-x 1 root root   512000 Jul  6 16:22 mpenginedb.db
+-rwxr-xr-x 1 root root    24192 Jul  6 16:12 MsMpEngCP.exe
+-rwxr-xr-x 1 root root    55200 Jul  6 16:12 MsMpEngSvc.dll
+drwxr-xr-x 3 root root     4096 Jul  6 16:12 RtSigs
+```
+
+```
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.87
+./History
+./History/Service
+./History/Service/Unknown.Log
+./History/Service/History.Log
+./History/Results
+./History/Results/Resource
+./History/Results/Resource/{DAB3D98E-E8B0-4472-8EF9-C8C48F2B0805}
+./History/Results/Resource/{E0DED3AC-0A79-4FC1-A045-44A6C16DFBCB}
+./History/Results/Resource/{0F8ACD10-0478-4F6A-AE5F-43FBBEF4C86E}
+./History/Results/Resource/{409EAAAE-9014-4B2D-B836-F94C6C0723C7}
+./History/Results/Resource/{D58AFF6E-C86E-43D4-888D-B0023A281361}
+./History/Results/Resource/{A09C49A5-5FD2-4D57-A9FC-CCB5A8D4A2A9}
+./History/Results/Resource/{C0F8E9B5-89EC-44D1-9C84-8B6FF7B3754C}
+./History/Results/Resource/{384A8842-CD9E-400C-9226-8C0D103FC9A7}
+./History/Results/Resource/{82E198CE-5E10-4D78-8970-F9EA123433C0}
+./History/Results/Resource/{2B61CB76-3D7F-4806-AC4B-813CF7AC6B8A}
+./History/Results/Resource/{06A3EB7C-FB0D-40AE-AC4D-19B2F480DFBB}
+./History/Results/Resource/{73F71983-09EB-4215-AFF1-8ABC0C6BEDD1}
+./History/Results/Resource/{39E72FED-359D-4495-A1DD-FB87A57F3FFB}
+./History/Results/Resource/{4AB2ADEA-B67D-48CA-9B87-7090BE901C57}
+./History/Results/Resource/{36CBF669-6C28-4283-BEDE-6F4ECBB9335E}
+./History/Results/Resource/{62ADA4E3-0651-4F7C-9BB5-B2FCC325071B}
+./History/Results/Resource/{2E48A126-BAD6-4EEC-8D85-05E063E5B5DF}
+./History/Results/Resource/{BC17C064-4D8A-4F8D-A809-AA39B05B56FE}
+./History/Results/Resource/{BC51BBCF-1F05-4AFA-8731-069840B2308C}
+./History/Results/Resource/{CCFF5139-D37E-4FBB-B799-4D3BFA755E1D}
+./History/Results/Resource/{168C5E4D-269E-42E0-8CD1-E89FBA171823}
+./History/Results/Resource/{B382797F-DE46-463B-A55E-7589D147D2D9}
+./History/Results/Resource/{344B26F1-A0D7-47F7-AB42-AAC634F26A15}
+./History/Results/Resource/{9BF84991-2C10-4074-9591-2AE14A5A12C3}
+./History/Results/Resource/{AC7B5160-E901-417D-A235-32706877812A}
+./History/Results/Quick
+./History/Results/Quick/{C049D884-D304-4F86-86E1-80B4B258CC45}
+./History/Results/Quick/{9EBFFACE-FF85-4BEF-B65F-9AD9EFEFE441}
+./History/ReportLatency
+./History/ReportLatency/Latency
+./History/ReportLatency/Latency/22
+./History/ReportLatency/Latency/01
+./History/ReportLatency/Latency/12
+./History/ReportLatency/Latency/19
+./History/ReportLatency/Latency/20
+./History/ReportLatency/Latency/04
+./History/CacheManager
+./History/CacheManager/205F5324-A62B-45C1-A13C-4845BD18E34E-0.bin
+./History/Store
+./MsMpEngSvc.dll
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.A0
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.6C
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.7E
+./MpDiag.bin
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.79
+./DefenderEcsCache.bin64
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.E6
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.67
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.83
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.DB
+./MsMpEngCP.exe
+./mpenginedb.db
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.7C
+./CleanFileTelemetry
+./FilesStash
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.01
+./RtSigs
+./RtSigs/Data
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.91
+./BackupStore
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.80
+./mpcache-3A136A7CCAA76D4ABC462E0EF513DFB3C597DF80.bin.9C
+```
 
 ## Dump
 

@@ -301,6 +301,113 @@ Important observed behaviors:
 
 From a system-design view, `ProcessScanQueue` is where per-process chronology, initialization, propagation, and module/process interpretation converge.
 
+### What `ProcessScanQueue` Consumes
+
+`ProcessScanQueue` consumes `INotification` objects from the owning `ProcessContext` heap. It does not receive raw ETW/RTP input directly, and it does not receive `NotificationItem` objects. The worker callback `ScanItemWaitAndDispatch` only gives it a `ProcessContext *`; the function then pops the real notifications itself.
+
+High-level consumed notification families:
+
+| Notification Tag | Name / Family | `ProcessScanQueue` Treatment |
+|---:|---|---|
+| `0x01` | `ProcessStart` | Marks startup observed at `ProcessContext +0xa6a`; can delay the start notification into `+0xa20` until process context readiness is established; later feeds startup/module metadata capture. |
+| `0x02` | `ProcessTerminate` | Special termination/deferred cleanup path. Can be delayed into `+0xa28`, replayed after module/image processing, and triggers cleanup checks downstream. |
+| `0x03` | `ProcessCreate` | Routed into the image/module analysis path after readiness checks; downstream captures startup/module metadata. |
+| `0x04` | `DriverLoad` | Downstream `ClassifyImageModuleEvent` has a type `4` case that routes to cleanup/check behavior. |
+| `0x05` | `ModuleLoad` | Main image/module-load path. This is one of the most important analysis pivots and reaches module event emission, friendly/trust checks, tainting, and cleanup checks. |
+| `0x06` | `OpenProcess` | Routed through the same analysis callback/classification path; downstream code handles process access/ASR-style reporting and cleanup checks. |
+| `0x1f` | `NetworkDetection` | `AnalyzeImageLoadEvent` has a specific branch before invoking module callbacks, then continues through the common callback path. |
+| `0x25` subtype `0x23` | `EngineInternal` deferred subtype | If the process context is not initialized, this subtype is deferred into `ProcessContext +0xa30/+0xa38/+0xa40`. |
+| `0x29` | `ProcessForkCount` | Routed through the startup/module metadata path and downstream module-event style reporting. |
+| `0x2d` | signer/details notification | Allowed through before normal initialization completes; downstream formats signer/cdhash/team/verdict data and emits a module-style event. |
+
+The function may technically pop any notification present in the process-context heap, but the observed consumer path meaningfully recognizes the families above. Other tags are usually handled earlier, by plugin callbacks, or are not accepted by the module/classification path.
+
+### `ProcessScanQueue` As A State Machine
+
+The function is less of a detector by itself and more of a per-process state machine.
+
+| Phase | What It Does | Important State |
+|---|---|---|
+| Serialize drain | Takes the process-context dispatch lock so only one drain operates per process context. | `ProcessContext +0xf0` |
+| Pop next event | Locks the per-process queue and pops the heap root. | Queue lock `+0x80`, heap `+0x48/+0x50/+0x58` |
+| Propagation gate | If related-process propagation is active, non-start notifications may be propagated and processing stops early. | Related-process state `+0x510`, lock `+0x580`, flags around `+0xa61/+0xa62/+0xa66` |
+| Startup/termination bookkeeping | Tracks whether process start was seen and handles close-in-time terminate behavior. | `+0xa6a`, `+0xa6b`, `+0xa68`, `+0xa70` |
+| Readiness/defer gate | If initialization is incomplete, holds startup, termination, or internal subtype `0x23` notifications rather than processing them immediately. | Init flag `+0xa18 & 0x10`, delayed slots `+0xa20/+0xa28`, deferred vector `+0xa30` |
+| Initialize process context | Calls initialization/replay logic when a normal event arrives before the context is ready. | `InitializeProcessContextAndReplayDeferredNotifications` |
+| Dispatch analysis | Calls `AnalyzeImageLoadEvent(process_context, notification)`. | Main downstream analysis path |
+| Replay termination | If a termination event was delayed, replays it through `AnalyzeImageLoadEvent` after the current event. | Delayed termination slot `+0xa28` |
+
+### Immediate Call Graph From `ProcessScanQueue`
+
+| Callee | Role |
+|---|---|
+| `PopProcessContextNotificationHeapRoot` | Removes the next `INotification` from the per-process priority heap. |
+| `PropagateNotificationToRelatedProcesses` | Re-emits a notification into related process contexts when propagation/taint state says to do so. |
+| `Bm_GetMetaStore` | Updates BM counters/telemetry for startup/termination/deferred cases. |
+| `IsInternalNotificationSubtype23` | Recognizes internal notifications that should be deferred until initialization. |
+| `InitializeProcessContextAndReplayDeferredNotifications` | Initializes process context state and replays held notifications. |
+| `AnalyzeImageLoadEvent` | Main post-readiness dispatcher for module/process/signing/network-related notifications. |
+
+### What `AnalyzeImageLoadEvent` Does
+
+`AnalyzeImageLoadEvent` is named like it only handles image loads, but from this queue path it is the common post-readiness analysis entry for the recognized notification families.
+
+Observed high-level behavior:
+
+- Marks analysis active/completed state at `ProcessContext +0xa67`.
+- For `ProcessStart`, `ProcessCreate`, and `ProcessForkCount`, calls `CaptureStartupModuleMetadataForProcess`.
+- For `NetworkDetection`, calls a network-specific helper before continuing.
+- Attaches process-context state to the notification through a virtual method using `ProcessContext +0xc0`.
+- Calls `InvokeModuleScanCallbacks(process_context, notification, 0)`.
+- Updates a global processed counter.
+- Calls an optional process-context callback object at `ProcessContext +0x478` if present.
+
+The key handoff is:
+
+```text
+ProcessScanQueue
+  -> AnalyzeImageLoadEvent
+       -> CaptureStartupModuleMetadataForProcess     // for tags 1, 3, 0x29
+       -> network-specific helper                    // for tag 0x1f
+       -> InvokeModuleScanCallbacks
+            -> ModuleCallbackRouter / registered callback list
+            -> PropagateNotificationToRelatedProcesses when callback requests it
+            -> ClassifyImageModuleEvent through the module callback chain
+```
+
+### Downstream Classification And Cleanup
+
+`ClassifyImageModuleEvent` is large, but at system-design level it turns queue notifications into behavior reports, trust decisions, taint state, ASR-style notifications, and cleanup checks.
+
+Examples of downstream behavior:
+
+| Function | High-Level Purpose |
+|---|---|
+| `CaptureStartupModuleMetadataForProcess` | Copies startup/module identity metadata from process notifications into `ProcessContext`. |
+| `InvokeModuleScanCallbacks` | Runs registered module/BM callbacks for the notification and handles callback-requested propagation. |
+| `ModuleCallbackRouter` | Dispatches one registered module callback. |
+| `ClassifyImageModuleEvent` | Main classifier for process/module/open-process/signing notification families. |
+| `EmitBehaviorModuleEvent` | Emits module-style behavior events. |
+| `EmitModuleEventWithOptionalAlias` | Emits module events with hardlink/alias support. |
+| `EmitModuleEventForHardlinkAlias` | Emits module events for hardlink alias cases. |
+| `EmitAsrNotification` | Emits ASR-related notification/report data. |
+| `MarkProcessTaintedAndNotify` | Marks a process as tainted and emits follow-up behavior state. |
+| `Bm_ReinspectTrackedProcess` | Re-runs/rechecks tracked process state after taint or module decisions. |
+| `ReportParentPropagationMatches` | Reports parent/propagation matches. |
+| `UpdateParentPropagationProcessId` | Updates parent propagation tracking state. |
+| `ProcessScanCleanupChecks` | Runs cleanup/security checks after certain event types. |
+
+`ProcessScanCleanupChecks` currently resolves to a compact set of post-processing checks:
+
+```text
+ProcessScanCleanupChecks
+  -> CheckProcessIntegrityElevation
+  -> CheckProcessHollowing
+  -> CheckSeDebugPrivilegeEscalation
+```
+
+For termination-style cleanup, it also clears some process-context state and closes a stored handle when the relevant state flag is set.
+
 ## Structure Details
 
 ### `ProcessContext`

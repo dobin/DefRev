@@ -10,23 +10,28 @@ The provider names `Microsoft-Windows-Threat-Intelligence`, `Microsoft-Windows-K
 
 1. `BmController` initializes the Behavior Monitoring subsystem.
 2. `EtwControllerImpl` opens three ETW real-time logger sessions: `DefenderApiLogger`, `DefenderAuditLogger`, and `DefenderApiLoggerLowPriv`.
-3. The ETW callback (`FUN_180129840`) forwards each raw record into the BM metastore ETW sink.
-4. The main ETW dispatcher (`FUN_1805d71bc`) filters self-generated or disabled events, classifies provider GUIDs, maps provider event IDs into internal BM event IDs, extracts properties through TDH, and calls event-family-specific converters.
-5. Converter functions emit BM notifications/behavior events through `FUN_18018689c` and `FUN_18003d798`, or directly through `EmitBehaviorModuleEvent` for module/report style events.
+3. The ETW callback (`BmEtw_EventRecordCallback`, `0x180129840`) forwards each raw record into the BM metastore ETW sink.
+4. The main ETW dispatcher (`BmEtw_DispatchEventRecord`, `0x1805d71bc`) filters self-generated or disabled events, classifies provider GUIDs, maps provider event IDs into internal BM event IDs, extracts properties through TDH, and calls event-family-specific converters.
+5. Converter functions emit BM notifications/behavior events through `BmEtw_EmitBehaviorEvent` and `BmEtw_QueueBehaviorEventNotification`, or directly through `EmitBehaviorModuleEvent` for module/report style events.
 6. BM notifications are queued into per-process `ProcessContext` objects, replayed in timestamp order, enriched with process/module metadata, and persisted/evaluated through `Bm_MetaStore*`.
 
 Important observed functions:
 
-- `FUN_18086e2fc`: `BmController` constructor/initializer; calls ETW controller setup when BM ETW is enabled.
-- `FUN_180b0c194`: `EtwControllerImpl` constructor; opens Defender logger sessions.
-- `FUN_180754064` / `FUN_1806be7c4`: dynamic loader for `OpenTraceW`, `ProcessTrace`, `CloseTrace`, and TDH APIs.
-- `FUN_180129840`: ETW callback wrapper that forwards records to metastore ETW processing.
-- `FUN_1805d71bc`: main ETW record classifier/dispatcher.
-- `FUN_1805ba57c`: provider GUID classifier.
-- `FUN_18057071c`: provider event ID to internal ETW event index mapper.
-- `FUN_18018689c` / `FUN_18003d798`: create and enqueue internal `EtwEvent`/BM behavior notifications.
-- `GetBehaviorEventName`: maps BM behavior IDs to human-readable names.
-- `GetNotificationTagName`: maps notification tags such as `ProcessStart`, `ModuleLoad`, `RemoteThreadCreate`, and `EtwEvent`.
+| Address | Name | Role |
+| --- | --- | --- |
+| `0x18086e2fc` | `BmController_Initialize` | `BmController` constructor/initializer; calls ETW controller setup when BM ETW is enabled. |
+| `0x18068d120` | `BmController_CreateEtwController` | Small wrapper that creates and attaches the ETW controller object to `BmController`. |
+| `0x180b0c194` | `EtwControllerImpl_Initialize` | `EtwControllerImpl` constructor/initializer; opens Defender logger sessions and initializes enabled-event state. |
+| `0x180754064` | `EtwController_LoadTraceAndTdhApis` | Dynamic loader for `OpenTraceW`, `ProcessTrace`, `CloseTrace`, and TDH APIs at the controller level. |
+| `0x1806be7c4` | `EtwFormatter_LoadTraceAndTdhApis` | Dynamic loader for the same ETW/TDH APIs at the formatter level. |
+| `0x180129840` | `BmEtw_EventRecordCallback` | ETW callback wrapper that forwards records to metastore ETW processing. |
+| `0x1805d71bc` | `BmEtw_DispatchEventRecord` | Main ETW record classifier/dispatcher. |
+| `0x1805ba57c` | `BmEtw_ClassifyProviderGuid` | Provider GUID classifier. |
+| `0x18057071c` | `BmEtw_MapProviderEventToIndex` | Provider event ID to internal ETW event index mapper. |
+| `0x18018689c` | `BmEtw_EmitBehaviorEvent` | Increments ETW event counters and forwards normalized BM behavior payloads. |
+| `0x18003d798` | `BmEtw_QueueBehaviorEventNotification` | Constructs an internal `EtwEvent`/BM notification and submits it into the queue path. |
+| `GetBehaviorEventName` | `GetBehaviorEventName` | Maps BM behavior IDs to human-readable names. |
+| `GetNotificationTagName` | `GetNotificationTagName` | Maps notification tags such as `ProcessStart`, `ModuleLoad`, `RemoteThreadCreate`, and `EtwEvent`. |
 
 ## Global Configuration State
 
@@ -34,7 +39,7 @@ Important observed functions:
 
 Purpose: global feature gates and sizing/bitmap controls for BM and ETW processing.
 
-Loaded by `FUN_180b014d0`; defaults registered by `FUN_18054fcc8`.
+Loaded by `LoadBmConfigurationValues` (`0x180b014d0`); defaults registered by `RegisterBmConfigurationDefaults` (`0x18054fcc8`).
 
 Key fields/settings:
 
@@ -50,9 +55,9 @@ Key fields/settings:
 Interactions:
 
 - `EtwControllerImpl` copies the event-list bitmaps into an enabled-event array.
-- `FUN_1805d71bc` increments per-event counters and drops disabled internal event indexes before conversion.
+- `BmEtw_DispatchEventRecord` increments per-event counters and drops disabled internal event indexes before conversion.
 - `BmController` skips ETW controller initialization when `MpDisableBmEtw` is set.
-- `FUN_1805d71bc` returns early when `MpDisableBmEtwProcessing` is set.
+- `BmEtw_DispatchEventRecord` returns early when `MpDisableBmEtwProcessing` is set.
 
 ## Primary Structures
 
@@ -65,7 +70,7 @@ Key fields observed:
 - vtable: `BmController::vftable`.
 - Multiple synchronization primitives / critical sections.
 - Queue/controller references used by `QueueRtpNotification`, `QueueBmNotification`, and process context setup.
-- ETW controller sub-object or pointer initialized from `FUN_18068d120` when ETW support is enabled.
+- ETW controller sub-object or pointer initialized from `BmController_CreateEtwController` (`0x18068d120`) when ETW support is enabled.
 - Module callback/router state used by `ModuleCallbackRouter`, `AnalyzeImageLoadEvent`, and `EmitBehaviorModuleEvent`.
 - Deduplication/throttle state derived from `MpTelemetryDedupTimeout` and `MpTelemetryDedupMaxSize`.
 
@@ -80,7 +85,7 @@ Interactions:
 
 Purpose: owns real-time ETW trace subscriptions and per-ETW-event dispatch state.
 
-Constructed in `FUN_180b0c194`.
+Constructed in `EtwControllerImpl_Initialize` (`0x180b0c194`).
 
 Key fields observed:
 
@@ -98,7 +103,7 @@ Key fields observed:
 
 Interactions:
 
-- Calls `OpenTraceW` with callback `FUN_180129840` for each real-time session.
+- Calls `OpenTraceW` with callback `BmEtw_EventRecordCallback` (`0x180129840`) for each real-time session.
 - Uses `EtwFormatter` instances to decode ETW records through TDH.
 - Hands raw records to the metastore ETW sink (`Bm_GetMetaStore` then object at metastore offset `+0x90`).
 
@@ -106,7 +111,7 @@ Interactions:
 
 Purpose: runtime wrapper for ETW and TDH APIs plus scratch buffers used to decode event properties.
 
-Constructed by `FUN_1806be758`; initialized by `FUN_1806be7c4` or `FUN_180754064`.
+Constructed by `EtwFormatter_Initialize` (`0x1806be758`); initialized by `EtwFormatter_LoadTraceAndTdhApis` (`0x1806be7c4`) or `EtwController_LoadTraceAndTdhApis` (`0x180754064`).
 
 Key fields observed:
 
@@ -121,13 +126,13 @@ Key fields observed:
   - `TdhGetPropertySize`
   - `TdhGetProperty`
   - `TdhFormatProperty`
-- scratch string/value buffers initialized by `FUN_1806be918`.
+- scratch string/value buffers initialized by `EtwFormatter_InitScratchState` (`0x1806be918`).
 
 Interactions:
 
 - Used by `EtwControllerImpl` when opening sessions and decoding records.
-- `FUN_1805a08b4` uses TDH-style calls to retrieve `TRACE_EVENT_INFO` for a raw ETW record.
-- Converter helpers (`FUN_18018cb90`, `FUN_18018be9c`, `FUN_18018c444`) read individual decoded properties from event records using this formatter state.
+- `BmEtw_GetTraceEventInfo` (`0x1805a08b4`) uses TDH-style calls to retrieve `TRACE_EVENT_INFO` for a raw ETW record.
+- Converter helpers (`BmEtw_ReadPropertyString`, `BmEtw_ReadPropertyUInt32`, `BmEtw_ReadPidAndTimestampProperties`) read individual decoded properties from event records using this formatter state.
 
 ### Raw ETW Record / `EVENT_RECORD`-like Object
 
@@ -135,15 +140,15 @@ Purpose: raw event passed to the ETW callback.
 
 Key fields used by the BM dispatcher:
 
-- provider GUID at the standard `EVENT_HEADER.ProviderId` location, classified by `FUN_1805ba57c`.
-- event descriptor ID used by `FUN_18057071c` and family-specific converters.
+- provider GUID at the standard `EVENT_HEADER.ProviderId` location, classified by `BmEtw_ClassifyProviderGuid`.
+- event descriptor ID used by `BmEtw_MapProviderEventToIndex` and family-specific converters.
 - process ID used to skip events generated by Defender itself.
 - flags used to skip generated/unsupported event records.
 - user context pointer used to reach the relevant formatter/controller state.
 
 Interactions:
 
-- Passed from `OpenTraceW` callback `FUN_180129840` into `FUN_1805d71bc`.
+- Passed from `OpenTraceW` callback `BmEtw_EventRecordCallback` into `BmEtw_DispatchEventRecord`.
 - Decoded through TDH into `TRACE_EVENT_INFO` and property values.
 - Converted into internal BM events through family-specific converter functions.
 
@@ -159,7 +164,7 @@ Key fields observed:
 
 Interactions:
 
-- Allocated by `FUN_1805a08b4` after probing size through TDH.
+- Allocated by `BmEtw_GetTraceEventInfo` after probing size through TDH.
 - Read by converters to extract properties by ordinal.
 - Destroyed after the converter completes.
 
@@ -266,7 +271,7 @@ Important notification tags:
 Interactions:
 
 - Created by the notification factory called from `QueueRtpNotification`.
-- Created directly from ETW converters by `FUN_18018689c` / `FUN_18003d798`.
+- Created directly from ETW converters by `BmEtw_EmitBehaviorEvent` / `BmEtw_QueueBehaviorEventNotification`.
 - Routed into `ProcessContext`, then analyzed or reported by module/behavior callbacks.
 
 ### BM Behavior Event Descriptor
@@ -284,8 +289,8 @@ Key fields observed:
 
 Interactions:
 
-- Created by ETW converters via `FUN_18018689c`.
-- Converted into an internal notification by `FUN_18003d798`.
+- Created by ETW converters via `BmEtw_EmitBehaviorEvent`.
+- Converted into an internal notification by `BmEtw_QueueBehaviorEventNotification`.
 - Emitted to module/report pipeline by `EmitBehaviorModuleEvent`.
 - Named by `GetBehaviorEventName`.
 
@@ -295,7 +300,7 @@ Purpose: persistent and in-memory BM state store. It tracks process identities, 
 
 Key fields observed:
 
-- ETW sink/processor object at metastore offset `+0x90`, used by `FUN_180129840`.
+- ETW sink/processor object at metastore offset `+0x90`, used by `BmEtw_EventRecordCallback`.
 - process identity / verdict stores used by `Bm_MetaStoreLookupVerdict`.
 - counters for dropped/deferred/missing events around offsets such as `+0x370`..`+0x380`.
 - process info and detection/event persistence functions (`Bm_MetaStoreRecordEvent`, `Bm_MetaStoreLookupVerdict`).
@@ -309,9 +314,9 @@ Interactions:
 
 ## ETW Provider Classification
 
-`FUN_1805ba57c` classifies incoming ETW records by comparing `EVENT_RECORD.EventHeader.ProviderId` against a static GUID table. The function returns small provider-family IDs (`1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, etc.). The analyzed image does not label those GUIDs with provider names.
+`BmEtw_ClassifyProviderGuid` classifies incoming ETW records by comparing `EVENT_RECORD.EventHeader.ProviderId` against a static GUID table. The function returns small provider-family IDs (`1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, etc.). The analyzed image does not label those GUIDs with provider names.
 
-`FUN_18057071c` then maps `(provider-family, event-id)` into an internal event index. That index is checked against `MpBmEtwEventList` / `MpBmEtwEventList2`. Only enabled indexes proceed to conversion.
+`BmEtw_MapProviderEventToIndex` then maps `(provider-family, event-id)` into an internal event index. That index is checked against `MpBmEtwEventList` / `MpBmEtwEventList2`. Only enabled indexes proceed to conversion.
 
 High-value families for process/API behavior:
 
@@ -329,21 +334,21 @@ Because provider names are absent, the likely mapping to the providers of intere
 
 The shared creation path is:
 
-1. Family-specific converter extracts relevant ETW properties through helper calls such as `FUN_18018cb90`, `FUN_18018be9c`, or `FUN_18018c444`.
-2. Converter calls `FUN_18018689c(EtwControllerImpl, bm_event_id, primary, secondary, extra_data, flags, identity)`.
-3. `FUN_18018689c` increments ETW event counters and calls `FUN_18003d798`.
-4. `FUN_18003d798` constructs an internal notification with tag `EtwEvent` and submits it into the BM notification path.
+1. Family-specific converter extracts relevant ETW properties through helper calls such as `BmEtw_ReadPropertyString`, `BmEtw_ReadPropertyUInt32`, or `BmEtw_ReadPidAndTimestampProperties`.
+2. Converter calls `BmEtw_EmitBehaviorEvent(EtwControllerImpl, bm_event_id, primary, secondary, extra_data, flags, identity)`.
+3. `BmEtw_EmitBehaviorEvent` increments ETW event counters and calls `BmEtw_QueueBehaviorEventNotification`.
+4. `BmEtw_QueueBehaviorEventNotification` constructs an internal notification with tag `EtwEvent` and submits it into the BM notification path.
 5. The notification is routed through `QueueBmNotification` / `SubmitNotificationToProcessContext` / `ProcessContextPushNotification`.
 
 ### Open Process / Open Thread / Terminate / Memory Manipulation
 
 Relevant functions:
 
-- `FUN_1803a6650`: top-level family-1 dispatcher.
-- `FUN_1803a7d54`: emits `BM_Etw_TerminateProcess` (`0x4019`).
-- `FUN_1803a64b0`: emits `BM_Etw_SetThreadContext` (`0x401d`).
-- `FUN_1807b5bf0`: emits `BM_Etw_OpenProcess` (`0x401f`).
-- `FUN_18073c1c4`: emits `BM_Etw_OpenThread` (`0x4020`).
+- `BmEtw_DispatchApiCallEventFamily` (`0x1803a6650`): top-level family-1 dispatcher.
+- `BmEtw_EmitTerminateProcess` (`0x1803a7d54`): emits `BM_Etw_TerminateProcess` (`0x4019`).
+- `BmEtw_EmitSetThreadContext` (`0x1803a64b0`): emits `BM_Etw_SetThreadContext` (`0x401d`).
+- `BmEtw_EmitOpenProcess` (`0x1807b5bf0`): emits `BM_Etw_OpenProcess` (`0x401f`).
+- `BmEtw_EmitOpenThread` (`0x18073c1c4`): emits `BM_Etw_OpenThread` (`0x4020`).
 - Other family-1 branches emit `BM_Etw_PsSetLoadImageNotifyRoutine`, `BM_Etw_WriteMemory`, `BM_Etw_RegisterLastShutdown`, and `BM_Etw_RegisterShutdown`.
 
 Typical extracted fields:
@@ -418,7 +423,7 @@ Relevant functions:
 - `ReportRemoteThreadInjectionBehavior`
 - `EmitRemoteThreadCreateXmlReport`
 - `GetRemoteThreadTargetImagePath`
-- `FUN_180187dc8`: ETW family converter for suspend/resume/thread-style event variants.
+- `BmEtw_EmitThreadOrRemoteThreadBehavior` (`0x180187dc8`): ETW family converter for suspend/resume/thread-style event variants.
 
 Observed flow:
 
@@ -445,8 +450,8 @@ Design note: remote thread creation is treated both as a direct process/thread n
 
 Relevant functions:
 
-- `FUN_1803a6728`: emits `BM_Etw_PsSetLoadImageNotifyRoutine` (`0x4018`).
-- `FUN_1807fd694`: emits driver-related events such as `BM_Etw_LoadDriver`, `BM_Etw_UnloadDriver`, `BM_Etw_LoadDevice`, `BM_Etw_UnloadDevice`.
+- `BmEtw_EmitPsSetLoadImageNotifyRoutine` (`0x1803a6728`): emits `BM_Etw_PsSetLoadImageNotifyRoutine` (`0x4018`).
+- `BmEtw_EmitDriverOrDeviceLoadEvent` (`0x1807fd694`): emits driver-related events such as `BM_Etw_LoadDriver`, `BM_Etw_UnloadDriver`, `BM_Etw_LoadDevice`, `BM_Etw_UnloadDevice`.
 
 Key fields:
 
@@ -463,7 +468,7 @@ Interactions:
 
 Relevant function:
 
-- `FUN_180620a28`
+- `BmEtw_DispatchAuditSecurityEvent` (`0x180620a28`)
 
 BM events emitted include:
 
@@ -526,4 +531,4 @@ The Defender BM architecture is not a simple ETW logger. It is a normalization a
 - Metastore verdicts suppress trusted/excluded targets and retain process/event state.
 - Higher-level behaviors can be synthesized from lower-level events, as seen with remote thread create becoming both `BM_RemoteThreadCreate` and `BM_Etw_CodeInjection`/`BM_Etw_V2CodeInjection`.
 
-For the providers of interest, the important architectural point is that Defender appears to consume their data indirectly through Defender logger sessions (`DefenderApiLogger`, `DefenderAuditLogger`, `DefenderApiLoggerLowPriv`) and then maps GUID/event IDs to BM behavior events. The conversion boundary is `FUN_1805d71bc` plus the family-specific converters; the process-context/module/report boundary is `QueueBmNotification` / `SubmitNotificationToProcessContext` / `ProcessScanQueue` / `EmitBehaviorModuleEvent`.
+For the providers of interest, the important architectural point is that Defender appears to consume their data indirectly through Defender logger sessions (`DefenderApiLogger`, `DefenderAuditLogger`, `DefenderApiLoggerLowPriv`) and then maps GUID/event IDs to BM behavior events. The conversion boundary is `BmEtw_DispatchEventRecord` plus the family-specific converters; the process-context/module/report boundary is `QueueBmNotification` / `SubmitNotificationToProcessContext` / `ProcessScanQueue` / `EmitBehaviorModuleEvent`.

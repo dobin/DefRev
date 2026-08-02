@@ -3,6 +3,8 @@
 * GPT 5.5 high
 * ~40$
 * https://winbindex.m417z.com/?file=mpengine.dll
+* Messy writeup Defender Reversing with [Deepseek](https://blog.deeb.ch/posts/reversing-defender-deepseek/), [Qwen](https://blog.deeb.ch/posts/reversing-defender-qwen/), [Opus](https://blog.deeb.ch/posts/reversing-defender-opus/)
+* Clean writeup Defender Reversing: [Defender Internals](https://blog.deeb.ch/posts/defender-ai-introspection/)
 
 
 ## A Trigger Callstack
